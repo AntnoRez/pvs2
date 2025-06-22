@@ -1,0 +1,110 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <math.h>
+
+#define NUM_RUNS 100
+#define DISPLAY_RUNS 5
+
+float** create_matrix(int rows, int cols) {
+    float** matrix = (float**)malloc(rows * sizeof(float*));
+    if (!matrix) return NULL;
+    
+    for (int i = 0; i < rows; i++) {
+        matrix[i] = (float*)malloc(cols * sizeof(float));
+        if (!matrix[i]) {
+            for (int j = 0; j < i; j++) free(matrix[j]);
+            free(matrix);
+            return NULL;
+        }
+    }
+    return matrix;
+}
+
+void free_matrix(float** matrix, int rows) {
+    if (!matrix) return;
+    for (int i = 0; i < rows; i++) free(matrix[i]);
+    free(matrix);
+}
+
+void input_matrix_elements(float** matrix, int rows, int cols, const char* name) {
+    printf("\nEnter elements for matrix %s:\n", name);
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            printf("Element [%d][%d]: ", i+1, j+1);
+            scanf("%f", &matrix[i][j]);
+        }
+    }
+}
+
+void matrix_operations(float** a, float** b, float** result, 
+                      int rows, int cols, char operation) {
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            switch(operation) {
+                case '+': result[i][j] = a[i][j] + b[i][j]; break;
+                case '-': result[i][j] = a[i][j] - b[i][j]; break;
+                case '*': result[i][j] = a[i][j] * b[i][j]; break;
+                case '/': result[i][j] = fabsf(b[i][j]) > 1e-6f ? a[i][j] / b[i][j] : 0.0f; break;
+            }
+        }
+    }
+}
+
+void print_results(const double times[], int total_runs, int display_runs) {
+    printf("\nFirst %d runs (CPU):\n", display_runs);
+    for (int i = 0; i < display_runs; i++) {
+        printf("Run %4d: %.6f sec\n", i+1, times[i]);
+    }
+
+    printf("\nLast %d runs (CPU):\n", display_runs);
+    for (int i = total_runs - display_runs; i < total_runs; i++) {
+        printf("Run %4d: %.6f sec\n", i+1, times[i]);
+    }
+}
+
+int main() {
+    int rows, cols;
+    
+    printf("Enter matrix dimensions (rows cols): ");
+    if (scanf("%d %d", &rows, &cols) != 2 || rows <= 0 || cols <= 0) {
+        fprintf(stderr, "Invalid matrix dimensions!\n");
+        return EXIT_FAILURE;
+    }
+
+    float** a = create_matrix(rows, cols);
+    float** b = create_matrix(rows, cols);
+    float** res = create_matrix(rows, cols);
+    
+    if (!a || !b || !res) {
+        fprintf(stderr, "Memory allocation failed!\n");
+        free_matrix(a, rows);
+        free_matrix(b, rows);
+        free_matrix(res, rows);
+        return EXIT_FAILURE;
+    }
+
+    input_matrix_elements(a, rows, cols, "A");
+    input_matrix_elements(b, rows, cols, "B");
+
+    double run_times[NUM_RUNS];
+    double total_time = 0.0;
+
+    for (int run = 0; run < NUM_RUNS; run++) {
+        clock_t start = clock();
+        matrix_operations(a, b, res, rows, cols, '+');
+        clock_t end = clock();
+        
+        run_times[run] = (double)(end - start) / CLOCKS_PER_SEC;
+        total_time += run_times[run];
+    }
+
+    print_results(run_times, NUM_RUNS, DISPLAY_RUNS);
+    printf("\nAverage time (CPU): %.6f sec\n", total_time / NUM_RUNS);
+
+    free_matrix(a, rows);
+    free_matrix(b, rows);
+    free_matrix(res, rows);
+
+    return EXIT_SUCCESS;
+}

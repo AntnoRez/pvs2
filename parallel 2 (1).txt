@@ -1,0 +1,148 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <cuda_runtime.h>
+
+#define MAX_RANDOM_VALUE 1000000
+#define NUM_THREAD_CONFIGS 3
+#define DISPLAY_RUNS 5
+
+/* Function for safe input of positive numbers */
+int get_positive_input(const char* prompt) {
+    int value;
+    while (1) {
+        printf("%s", prompt);
+        if (scanf("%d", &value) == 1 && value > 0) {
+            break;
+        }
+        printf("Input error. A positive integer is required.\n");
+        while (getchar() != '\n'); // Clear input buffer
+    }
+    return value;
+}
+
+/* Kernel for bitonic sort step */
+__global__ void bitonic_sort_kernel(int* dataset, int step, int stage, int total_elements) {
+    const unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total_elements) return;
+
+    const unsigned int pair_idx = idx ^ step;
+    
+    if (pair_idx > idx) {
+        if ((idx & stage) == 0) {
+            // Sort in ascending order
+            if (dataset[idx] > dataset[pair_idx]) {
+                const int temp = dataset[idx];
+                dataset[idx] = dataset[pair_idx];
+                dataset[pair_idx] = temp;
+            }
+        } else {
+            // Sort in descending order
+            if (dataset[idx] < dataset[pair_idx]) {
+                const int temp = dataset[idx];
+                dataset[idx] = dataset[pair_idx];
+                dataset[pair_idx] = temp;
+            }
+        }
+    }
+}
+
+/* Generate random data */
+void generate_random_data(int* dataset, int size) {
+    for (int i = 0; i < size; i++) {
+        dataset[i] = rand() % MAX_RANDOM_VALUE;
+    }
+}
+
+int main() {
+    // Get parameters from user
+    const int data_size = get_positive_input("Enter array size (recommended power of two): ");
+    const int num_executions = get_positive_input("Enter number of executions: ");
+
+    // Allocate host memory
+    int* host_data = (int*)malloc(data_size * sizeof(int));
+    if (host_data == NULL) {
+        printf("CPU memory allocation error!\n");
+        return EXIT_FAILURE;
+    }
+
+    // Allocate device memory
+    int* device_data = NULL;
+    cudaError_t err = cudaMalloc((void**)&device_data, data_size * sizeof(int));
+    if (err != cudaSuccess) {
+        printf("GPU memory allocation error: %s\n", cudaGetErrorString(err));
+        free(host_data);
+        return EXIT_FAILURE;
+    }
+
+    // Thread configurations for testing
+    const int thread_configs[NUM_THREAD_CONFIGS] = {4, 8, 16};
+
+    for (int config = 0; config < NUM_THREAD_CONFIGS; config++) {
+        const int threads_per_block = thread_configs[config];
+        const int blocks = (data_size + threads_per_block - 1) / threads_per_block;
+
+        float* execution_times = (float*)malloc(num_executions * sizeof(float));
+        float total_execution_time = 0.0f;
+
+        // Create events for timing
+        cudaEvent_t timer_start, timer_stop;
+        cudaEventCreate(&timer_start);
+        cudaEventCreate(&timer_stop);
+
+        printf("\n=== Configuration: %d threads per block ===\n", threads_per_block);
+
+        for (int execution = 0; execution < num_executions; execution++) {
+            // Generate new data for each execution
+            generate_random_data(host_data, data_size);
+            cudaMemcpy(device_data, host_data, data_size * sizeof(int), cudaMemcpyHostToDevice);
+
+            cudaEventRecord(timer_start);
+
+            // Bitonic sort
+            for (int stage = 2; stage <= data_size; stage <<= 1) {
+                for (int step = stage >> 1; step > 0; step >>= 1) {
+                    bitonic_sort_kernel<<<blocks, threads_per_block>>>(device_data, step, stage, data_size);
+                    cudaDeviceSynchronize();
+                }
+            }
+
+            cudaEventRecord(timer_stop);
+            cudaEventSynchronize(timer_stop);
+
+            // Calculate execution time
+            float milliseconds = 0;
+            cudaEventElapsedTime(&milliseconds, timer_start, timer_stop);
+            execution_times[execution] = milliseconds / 1000.0f;
+            total_execution_time += execution_times[execution];
+        }
+
+        // Display results
+        const int display_count = (num_executions < DISPLAY_RUNS) ? num_executions : DISPLAY_RUNS;
+        
+        printf("\nFirst %d executions:\n", display_count);
+        for (int i = 0; i < display_count; i++) {
+            printf("Execution %4d: %.6f sec\n", i + 1, execution_times[i]);
+        }
+
+        if (num_executions > DISPLAY_RUNS) {
+            printf("\nLast %d executions:\n", display_count);
+            for (int i = num_executions - display_count; i < num_executions; i++) {
+                printf("Execution %4d: %.6f sec\n", i + 1, execution_times[i]);
+            }
+        }
+
+        printf("\nAverage execution time: %.6f sec\n", 
+               total_execution_time / num_executions);
+
+        // Free resources
+        free(execution_times);
+        cudaEventDestroy(timer_start);
+        cudaEventDestroy(timer_stop);
+    }
+
+    // Free memory
+    cudaFree(device_data);
+    free(host_data);
+
+    return EXIT_SUCCESS;
+}

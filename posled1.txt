@@ -1,0 +1,68 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+
+#define DEFAULT_VALUE 1  // Constant for array initialization
+
+/* Fills an array with a given value */
+void initialize_array(int* data, size_t length) {
+    for (size_t i = 0; i < length; i++) {
+        data[i] = DEFAULT_VALUE;
+    }
+}
+
+/* Calculates the sum of array elements */
+long long compute_array_sum(const int* data, size_t length) {
+    long long total = 0;
+    for (size_t i = 0; i < length; i++) {
+        total += data[i];
+    }
+    return total;
+}
+
+/* Gets an integer value from user input */
+int get_user_input(const char* prompt) {
+    int value;
+    printf("%s", prompt);
+    if (scanf("%d", &value) != 1 || value <= 0) {
+        fprintf(stderr, "Error: Invalid input value!\n");
+        exit(EXIT_FAILURE);
+    }
+    return value;
+}
+
+int main() {
+    // Get parameters from user
+    const int elements_count = get_user_input("Enter number of array elements: ");
+    const int experiments_count = get_user_input("Enter number of experiments: ");
+
+    // Allocate and initialize array
+    int* numbers = (int*)malloc(elements_count * sizeof(int));
+    if (!numbers) {
+        fprintf(stderr, "Memory allocation error!\n");
+        return EXIT_FAILURE;
+    }
+    initialize_array(numbers, elements_count);
+
+    // Run experiments
+    double cumulative_time = 0.0;
+    for (int experiment = 0; experiment < experiments_count; experiment++) {
+        clock_t begin = clock();
+        
+        const long long sum = compute_array_sum(numbers, elements_count);
+        
+        clock_t end = clock();
+        cumulative_time += (double)(end - begin) / CLOCKS_PER_SEC;
+    }
+
+    // Print results
+    printf("\nFinal results:\n");
+    printf("• Array size: %d elements\n", elements_count);
+    printf("• Number of experiments: %d\n", experiments_count);
+    printf("• Average execution time: %.6f seconds\n", 
+           cumulative_time / experiments_count);
+
+    // Free resources
+    free(numbers);
+    return EXIT_SUCCESS;
+}

@@ -1,0 +1,122 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+
+#define PROGRESS_UPDATE_INTERVAL 10
+#define MAX_RANDOM_VALUE 1000000
+
+int get_positive_integer(const char* prompt) {
+    int value;
+    while (1) {
+        printf("%s", prompt);
+        if (scanf("%d", &value) == 1 && value > 0) {
+            break;
+        }
+        printf("Invalid input. Please enter a positive integer.\n");
+        while (getchar() != '\n');
+    }
+    return value;
+}
+
+double get_current_timestamp() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
+}
+
+void merge_sublists(int* array, int left, int mid, int right) {
+    int left_size = mid - left + 1;
+    int right_size = right - mid;
+
+    int* left_array = malloc(left_size * sizeof(int));
+    int* right_array = malloc(right_size * sizeof(int));
+
+    for (int i = 0; i < left_size; i++)
+        left_array[i] = array[left + i];
+    for (int j = 0; j < right_size; j++)
+        right_array[j] = array[mid + 1 + j];
+
+    int i = 0, j = 0, k = left;
+    while (i < left_size && j < right_size)
+        array[k++] = (left_array[i] <= right_array[j]) ? left_array[i++] : right_array[j++];
+
+    while (i < left_size) array[k++] = left_array[i++];
+    while (j < right_size) array[k++] = right_array[j++];
+
+    free(left_array);
+    free(right_array);
+}
+
+void perform_merge_sort(int* array, int left, int right) {
+    if (left < right) {
+        int mid = left + (right - left) / 2;
+        perform_merge_sort(array, left, mid);
+        perform_merge_sort(array, mid + 1, right);
+        merge_sublists(array, left, mid, right);
+    }
+}
+
+void input_array_elements(int* array, int size) {
+    printf("Enter %d array elements:\n", size);
+    for (int i = 0; i < size; i++) {
+        printf("Element %d: ", i+1);
+        scanf("%d", &array[i]);
+    }
+}
+
+int main() {
+    const int data_size = get_positive_integer("Enter array size: ");
+    const int iterations = get_positive_integer("Enter number of iterations: ");
+
+    int* data_array = malloc(data_size * sizeof(int));
+    double* time_results = malloc(iterations * sizeof(double));
+    
+    if (!data_array || !time_results) {
+        printf("Memory allocation error!\n");
+        free(data_array);
+        free(time_results);
+        return EXIT_FAILURE;
+    }
+
+    input_array_elements(data_array, data_size);
+
+    printf("\nRunning tests for %d elements, %d iterations...\n", data_size, iterations);
+
+    for (int current_run = 0; current_run < iterations; current_run++) {
+        double start_time = get_current_timestamp();
+        perform_merge_sort(data_array, 0, data_size - 1);
+        double end_time = get_current_timestamp();
+        time_results[current_run] = (end_time - start_time) / 1000.0;
+
+        if ((current_run + 1) % (iterations / PROGRESS_UPDATE_INTERVAL) == 0 || 
+            current_run == iterations - 1) {
+            printf("Completed: %d/%d (%.0f%%)\n", 
+                  current_run + 1, iterations, 
+                  (current_run + 1) * 100.0 / iterations);
+        }
+    }
+
+    const int results_to_show = (iterations < 10) ? iterations : 5;
+    
+    printf("\nResults (first and last %d runs):\n", results_to_show);
+    printf("First %d runs:\n", results_to_show);
+    for (int i = 0; i < results_to_show; i++)
+        printf("Run %4d: %.6f sec\n", i + 1, time_results[i]);
+
+    if (iterations > 10) {
+        printf("\nLast %d runs:\n", results_to_show);
+        for (int i = iterations - results_to_show; i < iterations; i++)
+            printf("Run %4d: %.6f sec\n", i + 1, time_results[i]);
+    }
+
+    double total_time = 0;
+    for (int i = 0; i < iterations; i++)
+        total_time += time_results[i];
+
+    printf("\nAverage execution time (merge sort): %.6f sec\n", 
+           total_time / iterations);
+
+    free(data_array);
+    free(time_results);
+    return EXIT_SUCCESS;
+}

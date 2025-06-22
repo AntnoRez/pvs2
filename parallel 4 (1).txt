@@ -1,0 +1,173 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <cuda_runtime.h>
+
+#define NUM_RUNS 100
+#define DISPLAY_RUNS 5
+#define NUM_THREAD_CONFIGS 3
+#define VERIFY_ELEMENTS 5
+#define EPSILON 1e-5f
+
+static const dim3 THREAD_CONFIGS[NUM_THREAD_CONFIGS] = {
+    dim3(4, 4), 
+    dim3(8, 8), 
+    dim3(16, 16)
+};
+
+__global__ void matrix_operations_kernel(const float *a, const float *b, float *result, 
+                                       int rows, int cols, char operation) {
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (row < rows && col < cols) {
+        int idx = row * cols + col;
+        switch(operation) {
+            case '+': result[idx] = a[idx] + b[idx]; break;
+            case '-': result[idx] = a[idx] - b[idx]; break;
+            case '*': result[idx] = a[idx] * b[idx]; break;
+            case '/': result[idx] = fabsf(b[idx]) > EPSILON ? a[idx] / b[idx] : 0.0f; break;
+        }
+    }
+}
+
+void input_matrix_elements(float* matrix, int rows, int cols, const char* name) {
+    printf("\nEnter elements for matrix %s (row-wise):\n", name);
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            printf("Element [%d][%d]: ", i+1, j+1);
+            scanf("%f", &matrix[i * cols + j]);
+        }
+    }
+}
+
+void host_matrix_operations(const float *a, const float *b, float *result,
+                          int rows, int cols, char operation) {
+    for (int i = 0; i < rows * cols; i++) {
+        switch(operation) {
+            case '+': result[i] = a[i] + b[i]; break;
+            case '-': result[i] = a[i] - b[i]; break;
+            case '*': result[i] = a[i] * b[i]; break;
+            case '/': result[i] = fabsf(b[i]) > EPSILON ? a[i] / b[i] : 0.0f; break;
+        }
+    }
+}
+
+void verify_results(const float *cpu_result, const float *gpu_result, int elements) {
+    printf("\nVerifying first %d elements:\n", elements);
+    for (int i = 0; i < elements; i++) {
+        if (fabs(cpu_result[i] - gpu_result[i]) > EPSILON) {
+            printf("Mismatch at index %d: CPU=%.6f, GPU=%.6f\n",
+                  i, cpu_result[i], gpu_result[i]);
+            return;
+        }
+    }
+    printf("All %d elements match between CPU and GPU results\n", elements);
+}
+
+void print_performance_stats(const double times[], int total_runs, int display_runs, 
+                           const dim3 *threads) {
+    printf("\n--- Thread configuration: %dx%d ---\n", threads->x, threads->y);
+    printf("First %d runs:\n", display_runs);
+    for (int i = 0; i < display_runs; i++) {
+        printf("Run %3d: %.6f sec\n", i+1, times[i]);
+    }
+
+    printf("\nLast %d runs:\n", display_runs);
+    for (int i = total_runs - display_runs; i < total_runs; i++) {
+        printf("Run %3d: %.6f sec\n", i+1, times[i]);
+    }
+}
+
+int main() {
+    int rows, cols;
+    printf("Enter matrix dimensions (rows cols): ");
+    if (scanf("%d %d", &rows, &cols) != 2 || rows <= 0 || cols <= 0) {
+        fprintf(stderr, "Invalid matrix dimensions!\n");
+        return EXIT_FAILURE;
+    }
+
+    size_t matrix_size = rows * cols * sizeof(float);
+    float *h_a = (float*)malloc(matrix_size);
+    float *h_b = (float*)malloc(matrix_size);
+    float *h_cpu_result = (float*)malloc(matrix_size);
+    float *h_gpu_result = (float*)malloc(matrix_size);
+    
+    if (!h_a || !h_b || !h_cpu_result || !h_gpu_result) {
+        fprintf(stderr, "Host memory allocation failed!\n");
+        free(h_a); free(h_b); free(h_cpu_result); free(h_gpu_result);
+        return EXIT_FAILURE;
+    }
+
+    input_matrix_elements(h_a, rows, cols, "A");
+    input_matrix_elements(h_b, rows, cols, "B");
+
+    host_matrix_operations(h_a, h_b, h_cpu_result, rows, cols, '+');
+
+    float *d_a, *d_b, *d_result;
+    cudaError_t err;
+    
+    if ((err = cudaMalloc((void**)&d_a, matrix_size)) != cudaSuccess ||
+        (err = cudaMalloc((void**)&d_b, matrix_size)) != cudaSuccess ||
+        (err = cudaMalloc((void**)&d_result, matrix_size)) != cudaSuccess) {
+        fprintf(stderr, "Device memory allocation failed: %s\n", cudaGetErrorString(err));
+        cudaFree(d_a); cudaFree(d_b); cudaFree(d_result);
+        free(h_a); free(h_b); free(h_cpu_result); free(h_gpu_result);
+        return EXIT_FAILURE;
+    }
+
+    if ((err = cudaMemcpy(d_a, h_a, matrix_size, cudaMemcpyHostToDevice)) != cudaSuccess ||
+        (err = cudaMemcpy(d_b, h_b, matrix_size, cudaMemcpyHostToDevice)) != cudaSuccess) {
+        fprintf(stderr, "Data copy to device failed: %s\n", cudaGetErrorString(err));
+        cudaFree(d_a); cudaFree(d_b); cudaFree(d_result);
+        free(h_a); free(h_b); free(h_cpu_result); free(h_gpu_result);
+        return EXIT_FAILURE;
+    }
+
+    for (int t = 0; t < NUM_THREAD_CONFIGS; t++) {
+        dim3 threads = THREAD_CONFIGS[t];
+        dim3 blocks((cols + threads.x - 1) / threads.x,
+                   (rows + threads.y - 1) / threads.y);
+
+        cudaEvent_t start, stop;
+        cudaEventCreate(&start);
+        cudaEventCreate(&stop);
+
+        double run_times[NUM_RUNS];
+        double total_time = 0.0;
+
+        for (int run = 0; run < NUM_RUNS; run++) {
+            cudaEventRecord(start);
+            matrix_operations_kernel<<<blocks, threads>>>(d_a, d_b, d_result, rows, cols, '+');
+            cudaEventRecord(stop);
+            cudaEventSynchronize(stop);
+            
+            float milliseconds = 0;
+            cudaEventElapsedTime(&milliseconds, start, stop);
+            run_times[run] = milliseconds / 1000.0;
+            total_time += run_times[run];
+        }
+
+        print_performance_stats(run_times, NUM_RUNS, DISPLAY_RUNS, &threads);
+        printf("\nAverage time: %.6f sec\n", total_time / NUM_RUNS);
+
+        if ((err = cudaMemcpy(h_gpu_result, d_result, matrix_size, cudaMemcpyDeviceToHost)) != cudaSuccess) {
+            fprintf(stderr, "Result copy from device failed: %s\n", cudaGetErrorString(err));
+            continue;
+        }
+        verify_results(h_cpu_result, h_gpu_result, VERIFY_ELEMENTS);
+
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+    }
+
+    cudaFree(d_a);
+    cudaFree(d_b);
+    cudaFree(d_result);
+    free(h_a);
+    free(h_b);
+    free(h_cpu_result);
+    free(h_gpu_result);
+
+    return EXIT_SUCCESS;
+}

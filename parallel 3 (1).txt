@@ -1,0 +1,143 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <cuda_runtime.h>
+
+#define NUM_RUNS 100
+#define DISPLAY_RUNS 5
+#define NUM_THREAD_CONFIGS 3
+
+__global__ void array_operations_kernel(const float *a, const float *b, float *result, 
+                                      int size, char operation) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        switch(operation) {
+            case '+': result[idx] = a[idx] + b[idx]; break;
+            case '-': result[idx] = a[idx] - b[idx]; break;
+            case '*': result[idx] = a[idx] * b[idx]; break;
+            case '/': result[idx] = fabsf(b[idx]) > 1e-6f ? a[idx] / b[idx] : 0.0f; break;
+        }
+    }
+}
+
+void input_array_elements(float* array, int size, const char* name) {
+    printf("\nEnter elements for array %s:\n", name);
+    for (int i = 0; i < size; i++) {
+        printf("Element %d: ", i+1);
+        scanf("%f", &array[i]);
+    }
+}
+
+void print_performance_stats(const double times[], int total_runs, int display_runs, int threads) {
+    printf("\nThreads per block: %d\n", threads);
+    printf("First %d runs:\n", display_runs);
+    for (int i = 0; i < display_runs; i++) {
+        printf("Run %4d: %.6f sec\n", i+1, times[i]);
+    }
+
+    printf("\nLast %d runs:\n", display_runs);
+    for (int i = total_runs - display_runs; i < total_runs; i++) {
+        printf("Run %4d: %.6f sec\n", i+1, times[i]);
+    }
+}
+
+int main() {
+    int size;
+    printf("Enter array size (elements): ");
+    if (scanf("%d", &size) != 1 || size <= 0) {
+        fprintf(stderr, "Invalid array size!\n");
+        return EXIT_FAILURE;
+    }
+
+    float *h_a = (float*)malloc(size * sizeof(float));
+    float *h_b = (float*)malloc(size * sizeof(float));
+    float *h_result = (float*)malloc(size * sizeof(float));
+    
+    if (!h_a || !h_b || !h_result) {
+        fprintf(stderr, "Host memory allocation failed!\n");
+        free(h_a); free(h_b); free(h_result);
+        return EXIT_FAILURE;
+    }
+
+    input_array_elements(h_a, size, "A");
+    input_array_elements(h_b, size, "B");
+
+    float *d_a, *d_b, *d_result;
+    cudaError_t err;
+    err = cudaMalloc((void**)&d_a, size * sizeof(float));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "Device memory allocation failed for d_a: %s\n", cudaGetErrorString(err));
+        free(h_a); free(h_b); free(h_result);
+        return EXIT_FAILURE;
+    }
+    
+    err = cudaMalloc((void**)&d_b, size * sizeof(float));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "Device memory allocation failed for d_b: %s\n", cudaGetErrorString(err));
+        cudaFree(d_a); free(h_a); free(h_b); free(h_result);
+        return EXIT_FAILURE;
+    }
+    
+    err = cudaMalloc((void**)&d_result, size * sizeof(float));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "Device memory allocation failed for d_result: %s\n", cudaGetErrorString(err));
+        cudaFree(d_a); cudaFree(d_b); free(h_a); free(h_b); free(h_result);
+        return EXIT_FAILURE;
+    }
+
+    err = cudaMemcpy(d_a, h_a, size * sizeof(float), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "Copy to device failed for d_a: %s\n", cudaGetErrorString(err));
+        cudaFree(d_a); cudaFree(d_b); cudaFree(d_result);
+        free(h_a); free(h_b); free(h_result);
+        return EXIT_FAILURE;
+    }
+    
+    err = cudaMemcpy(d_b, h_b, size * sizeof(float), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "Copy to device failed for d_b: %s\n", cudaGetErrorString(err));
+        cudaFree(d_a); cudaFree(d_b); cudaFree(d_result);
+        free(h_a); free(h_b); free(h_result);
+        return EXIT_FAILURE;
+    }
+
+    const int thread_configs[NUM_THREAD_CONFIGS] = {4, 8, 16};
+    double run_times[NUM_RUNS];
+
+    for (int t = 0; t < NUM_THREAD_CONFIGS; t++) {
+        int threads = thread_configs[t];
+        int blocks = (size + threads - 1) / threads;
+        double total_time = 0.0;
+
+        cudaEvent_t start, stop;
+        cudaEventCreate(&start);
+        cudaEventCreate(&stop);
+
+        for (int run = 0; run < NUM_RUNS; run++) {
+            cudaEventRecord(start);
+            array_operations_kernel<<<blocks, threads>>>(d_a, d_b, d_result, size, '+');
+            cudaEventRecord(stop);
+            cudaEventSynchronize(stop);
+            
+            float milliseconds = 0;
+            cudaEventElapsedTime(&milliseconds, start, stop);
+            run_times[run] = milliseconds / 1000.0;
+            total_time += run_times[run];
+        }
+
+        print_performance_stats(run_times, NUM_RUNS, DISPLAY_RUNS, threads);
+        printf("\nAverage time: %.6f sec\n", total_time / NUM_RUNS);
+
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+    }
+
+    cudaFree(d_a);
+    cudaFree(d_b);
+    cudaFree(d_result);
+    free(h_a);
+    free(h_b);
+    free(h_result);
+
+    return EXIT_SUCCESS;
+}
